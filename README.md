@@ -1,9 +1,8 @@
 # opencode-nvidia-models
 
-Keeps OpenCode's NVIDIA (build.nvidia.com) model list in sync with the live API.
-Retires models the API stops serving; optionally exposes live-but-uncatalogued models
-(e.g. `nvidia/nemotron-3.5-bolt-e4b`) via an allow-list.
-**Tests models on first use** — disables models that timeout or error on chat completions.
+Keeps OpenCode's NVIDIA (build.nvidia.com) model list in sync with what the API actually serves **and works for your API key**.
+
+**Tests ALL models on startup** — only models that successfully respond to chat completions appear in the picker.
 
 ## One-line install
 
@@ -13,7 +12,7 @@ opencode plugin add github:rmrtnv/opencode-nvidia-models
 
 # 2) give it your API key (activates the provider)
 export NVIDIA_API_KEY="nvapi-..."
-# or: ./install.sh --key nvapi-... --extra-model nvidia/nemotron-3.5-bolt-e4b
+# or: ./install.sh --key nvapi-...
 ```
 
 Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
@@ -22,14 +21,22 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 
 | Feature | How |
 |---|---|
-| **Prune retired models** | Every 6 h (configurable) it calls `GET /v1/models`; any catalog model not in the response is removed. |
-| **Cache & retry** | Last good inventory cached 7 days. On HTTP 451 / network failure it keeps the cached list and retries in 30 min. |
-| **Extra models** | `extraModels: ["nvidia/nemotron-3.5-bolt-e4b"]` adds models the API serves but models.dev hasn't catalogued yet, with safe defaults (64 k context, tools enabled). |
-| **Lazy health check** | On first use, tests each model with a quick chat completion. Models that timeout/error are disabled and removed from the picker. Results cached 7 days. |
-| **Startup health check** | `testAllOnStartup: true` tests ALL models on plugin load (and on inventory refresh), only adding healthy ones to the picker. Parallel with 3-at-a-time concurrency. |
-| **Zero-config provider** | The plugin only *updates* the catalog `nvidia` provider with your `baseURL` + key. You still need the key in `providers.nvidia.settings.apiKey` or `NVIDIA_API_KEY` to activate it. |
+| **Dynamic discovery** | Every 6h (configurable) calls `GET /v1/models` — no hardcoded lists. |
+| **Proactive health check** | On startup, tests ALL live models with a quick chat completion (3 concurrent, 10s timeout). Only responding models added to picker. |
+| **Cache & retry** | Results cached 7 days. Failed models re-tested on each refresh. Network hiccups never empty your list. |
+| **Prune retired** | Models the API stops serving are removed from picker. |
+| **Zero-config provider** | Updates the catalog `nvidia` provider with your `baseURL` + key. |
 
-## Config (usually created by `install.sh`)
+## How it works
+
+1. **Fetch live inventory** from `https://integrate.api.nvidia.com/v1/models` (~85 models)
+2. **Test each model** with `POST /chat/completions` (5 tokens, "hi")
+3. **Only healthy models** appear in `/models` picker
+4. **Cache results** 7 days — failed models re-tested on next refresh
+
+This naturally filters to **models your API key can actually access** (free tier, paid tier, regional availability, etc.) — no need for credit checks or hardcoded free lists.
+
+## Config (created by `install.sh`)
 
 ```jsonc
 {
@@ -37,8 +44,7 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
   "model": "nvidia/nemotron-3-ultra-550b-a55b",
   "plugins": [
     { "package": "github:rmrtnv/opencode-nvidia-models",
-      "options": { "refreshHours": 6,
-                   "extraModels": ["nvidia/nemotron-3.5-bolt-e4b"] } }
+      "options": { "refreshHours": 6 } }
   ],
   "providers": {
     "nvidia": {
@@ -55,65 +61,25 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 
 | Option | Default | Purpose |
 |---|---|---|
-| `apiKey` | `NVIDIA_API_KEY` → config | Credential used for the discovery request only. |
+| `apiKey` | `NVIDIA_API_KEY` → config | Credential for discovery + health checks. |
 | `baseURL` | `https://integrate.api.nvidia.com/v1` | Provider endpoint (also discovery unless overridden). |
 | `discoveryURL` | `baseURL` | Separate `GET /models` endpoint (e.g. behind a gateway). |
 | `refreshHours` | `6` | Re-check interval (min 1). |
-| `extraModels` | `[]` | Explicit allow-list of model IDs to expose when live but missing from the catalog. |
-| `includeFreeModels` | `true` | If `true`, automatically adds all known free-tier models that are currently live (uses a built-in list synced from the NVIDIA free models page). |
-| `testModelsOnUse` | `true` | If `true`, tests each model with a quick chat completion on first use. Failing models are disabled and cached for 7 days. |
-| `testAllOnStartup` | `false` | If `true`, tests ALL models on plugin load and on inventory refresh. Only healthy models are added to the picker. |
 
-### `extraModels` vs `includeFreeModels`
+## Inspect model status
 
-* **`extraModels`** – manual allow-list. Use when you want to cherry-pick a specific model (e.g. a newly released model not yet in the catalog).
-* **`includeFreeModels: true`** – hands-free: the plugin knows the 30+ free-tier model IDs (from NVIDIA’s published free list) and will surface any of them that the API is serving right now. No need to track IDs yourself.
-
-You can use both together.
-
-#### Example: enable all free models + one extra
-
-```jsonc
-{
-  "plugins": [
-    {
-      "package": "github:rmrtnv/opencode-nvidia-models",
-      "options": {
-        "refreshHours": 6,
-        "includeFreeModels": true,
-        "extraModels": ["nvidia/nemotron-3.5-bolt-e4b"]
-      }
-    }
-  ],
-  "providers": {
-    "nvidia": {
-      "settings": {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
-        "apiKey": "nvapi-..."
-      }
-    }
-  }
-}
+Plugin logs a summary on startup:
+```
+health check complete: 7/85 models healthy
 ```
 
-#### Advanced: discover candidates manually
+Full status cached at `nvidia/model-status` (query via OpenCode storage).
 
-If you prefer to curate the list yourself, fetch the live inventory once:
+## Why no `extraModels` / `includeFreeModels`?
 
-```bash
-curl -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models | jq '.data[].id'
-```
-
-Compare that to `/models` in OpenCode; any API ID missing from the picker can be added via `extraModels`.
-
-## Reinstall / new machine
-
-```bash
-opencode plugin add github:rmrtnv/opencode-nvidia-models
-export NVIDIA_API_KEY="nvapi-..."   # or copy your opencode.json
-```
-
-`opencode uninstall` keeps config and sessions, so a reinstall on the same machine needs nothing else.
+- **No hardcoded lists** — the API is the source of truth
+- **No manual allowlists** — if the API serves it and it works, it's in the picker
+- **No free/paid distinction** — health check reveals what your key can access
 
 ## License
 
