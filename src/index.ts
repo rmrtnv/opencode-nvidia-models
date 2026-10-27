@@ -30,12 +30,49 @@ const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000
 const MIN_PLAUSIBLE_MODELS = 3
 const RETRY_MINUTES = 30
 
+// Known free-tier model IDs (from the scraped free_models.json)
+const FREE_MODEL_IDS = [
+  "deepseek-ai/deepseek-v4.1-flash",
+  "google/diffusiongemma-26b-a4b-it",
+  "google/gemma-4-31b-it",
+  "google/paligemma",
+  "ipd/rfd4-proteina",
+  "meta/llama-3.2-11b-vision-instruct",
+  "meta/llama-3.2-90b-vision-instruct",
+  "meta/llama-guard-4-12b",
+  "meta/muse-glimmer-30b",
+  "minimaxai/minimax-m3.1-flash",
+  "nvidia/ai-synthetic-video-detector",
+  "nvidia/cosmos3-nano",
+  "nvidia/ising-calibration-1.5-31b",
+  "nvidia/kumo-relational",
+  "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+  "nvidia/nemotron-3-embed-1b",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+  "nvidia/nemotron-3.5-bolt-e4b",
+  "nvidia/nemotron-3.5-content-safety",
+  "nvidia/nemotron-3.5-embed-1b",
+  "nvidia/nemotron-3.5-embed-8b",
+  "nvidia/nemotron-3.5-lightning-30b-a3b",
+  "nvidia/nemotron-3.5-parse",
+  "nvidia/nemotron-3.5-rerank-8b",
+  "nvidia/nemotron-3.5-super-vl-120b-a12b",
+  "nvidia/riva-translate-4b-instruct-v2",
+  "openai/gpt-oss-20b",
+  "poolside/laguna-xs-2.1",
+  "stepfun-ai/step-5-preview",
+  "z-ai/glm-5.3",
+  "z-ai/glm-5.3-flash",
+]
+
 type Options = {
   apiKey?: string
   baseURL?: string
   refreshHours?: number
   discoveryURL?: string
   extraModels?: string[]
+  includeFreeModels?: boolean
 }
 
 type Cache = { at: number; ids: string[] }
@@ -103,6 +140,7 @@ export default Plugin.define({
     const refreshHours = Math.max(1, Number(options.refreshHours) || DEFAULT_REFRESH_HOURS)
     const interval = refreshHours * 60 * 60 * 1000
     const extraModels = (options.extraModels ?? []).filter((id): id is string => typeof id === "string" && id.length > 0)
+    const includeFreeModels = options.includeFreeModels === true
 
     const state: { live?: Set<string>; warnedNoKey: boolean } = { warnedNoKey: false }
 
@@ -133,13 +171,20 @@ export default Plugin.define({
         })
 
         const live = state.live
-        if (extraModels.length === 0 || !live) return
+        // Combine explicit extraModels with free-tier models (if opted-in) that are live.
+        let combinedExtra = [...extraModels]
+        if (includeFreeModels && live) {
+          for (const id of FREE_MODEL_IDS) {
+            if (live.has(id) && !combinedExtra.includes(id)) combinedExtra.push(id)
+          }
+        }
+        if (combinedExtra.length === 0 || !live) return
 
-        // Only models the caller explicitly asked for, and only while the API
+        // Only models the caller explicitly asked for (or free-tier opt-in), and only while the API
         // actually serves them. Covers endpoints models.dev has not catalogued
         // yet (for example nvidia/nemotron-3.5-bolt-e4b) without polluting the
         // picker with embeddings, detectors, or media models.
-        const missing = extraModels.filter((id) => live.has(id) && !record.models.has(id))
+        const missing = combinedExtra.filter((id) => live.has(id) && !record.models.has(id))
         if (missing.length === 0) return
 
         const added = missing.map((id) => ({

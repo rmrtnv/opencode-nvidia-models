@@ -56,26 +56,50 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 | `baseURL` | `https://integrate.api.nvidia.com/v1` | Provider endpoint (also discovery unless overridden). |
 | `discoveryURL` | `baseURL` | Separate `GET /models` endpoint (e.g. behind a gateway). |
 | `refreshHours` | `6` | Re-check interval (min 1). |
-| `extraModels` | `[]` | Model IDs to expose when live but missing from the catalog. |
+| `extraModels` | `[]` | Explicit allow-list of model IDs to expose when live but missing from the catalog. |
+| `includeFreeModels` | `false` | If `true`, automatically adds all known free-tier models that are currently live (uses a built-in list synced from the NVIDIA free models page). |
 
-### What are `extraModels` and how to find them?
+### `extraModels` vs `includeFreeModels`
 
-The NVIDIA API often serves models that aren't yet in the models.dev catalog OpenCode uses.
-`extraModels` is an allow-list: only the IDs you list are added, and only while the API actually serves them.
+* **`extraModels`** – manual allow-list. Use when you want to cherry-pick a specific model (e.g. a newly released model not yet in the catalog).
+* **`includeFreeModels: true`** – hands-free: the plugin knows the 30+ free-tier model IDs (from NVIDIA’s published free list) and will surface any of them that the API is serving right now. No need to track IDs yourself.
 
-To discover candidates, run once with a valid key:
+You can use both together.
+
+#### Example: enable all free models + one extra
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "github:rmrtnv/opencode-nvidia-models",
+      "options": {
+        "refreshHours": 6,
+        "includeFreeModels": true,
+        "extraModels": ["nvidia/nemotron-3.5-bolt-e4b"]
+      }
+    }
+  ],
+  "providers": {
+    "nvidia": {
+      "settings": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "nvapi-..."
+      }
+    }
+  }
+}
+```
+
+#### Advanced: discover candidates manually
+
+If you prefer to curate the list yourself, fetch the live inventory once:
 
 ```bash
 curl -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models | jq '.data[].id'
 ```
 
-Compare that list to what `/models` shows in OpenCode. Any ID that appears in the API response but not in `/models` is a candidate for `extraModels`.
-
-Example: `nvidia/nemotron-3.5-bolt-e4b` is live but missing from the catalog — add it with:
-
-```jsonc
-"extraModels": ["nvidia/nemotron-3.5-bolt-e4b"]
-```
+Compare that to `/models` in OpenCode; any API ID missing from the picker can be added via `extraModels`.
 
 ## Reinstall / new machine
 

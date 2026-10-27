@@ -3,8 +3,9 @@
 # global config. Safe to re-run: it merges instead of overwriting.
 #
 # Usage:
-#   ./install.sh --key nvapi-... [--extra-model nvidia/nemotron-3.5-bolt-e4b] \
-#                [--refresh-hours 6] [--plugin github:rmrtnv/opencode-nvidia-models]
+#   ./install.sh --key nvapi-... [--extra-model nvidia/...] \
+#                [--refresh-hours 6] [--include-free] \
+#                [--plugin github:rmrtnv/opencode-nvidia-models]
 #
 # Key can also come from $NVIDIA_API_KEY (no --key needed).
 
@@ -15,6 +16,7 @@ API_KEY="${NVIDIA_API_KEY:-}"
 REFRESH_HOURS="6"
 SET_DEFAULT="yes"
 EXTRA_MODELS=()
+INCLUDE_FREE="false"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -22,8 +24,9 @@ while [ $# -gt 0 ]; do
     --plugin) PLUGIN_SPEC="${2:-}"; shift 2 ;;
     --refresh-hours) REFRESH_HOURS="${2:-}"; shift 2 ;;
     --extra-model) EXTRA_MODELS+=("${2:-}"); shift 2 ;;
+    --include-free) INCLUDE_FREE="true"; shift ;;
     --no-default) SET_DEFAULT="no"; shift ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -62,6 +65,7 @@ REFRESH_HOURS="$REFRESH_HOURS" \
 DEFAULT_MODEL="$DEFAULT_MODEL" \
 SET_DEFAULT="$SET_DEFAULT" \
 EXTRA_MODELS="$(IFS=,; echo "${EXTRA_MODELS[*]:-}")" \
+INCLUDE_FREE="$INCLUDE_FREE" \
 python3 - <<'PY'
 import json, os, sys
 
@@ -72,6 +76,7 @@ hours = max(1, int(float(os.environ["REFRESH_HOURS"])))
 default_model = os.environ["DEFAULT_MODEL"]
 set_default = os.environ["SET_DEFAULT"] == "yes"
 extras = [entry for entry in os.environ.get("EXTRA_MODELS", "").split(",") if entry]
+include_free = os.environ.get("INCLUDE_FREE", "false") == "true"
 
 try:
     with open(path) as fh:
@@ -97,12 +102,16 @@ if spec:
                 merged = list(options.get("extraModels") or [])
                 merged += [entry for entry in extras if entry not in merged]
                 options["extraModels"] = merged
+            if include_free:
+                options["includeFreeModels"] = True
             plugins[index] = {"package": spec, "options": options}
             break
     else:
         options = {"refreshHours": hours}
         if extras:
             options["extraModels"] = extras
+        if include_free:
+            options["includeFreeModels"] = True
         plugins.append({"package": spec, "options": options})
 
 if set_default and not str(cfg.get("model", "")).startswith("nvidia/"):
