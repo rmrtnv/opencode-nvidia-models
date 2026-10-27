@@ -17,6 +17,8 @@ import { join } from "node:path"
  *     block never empties your model list.
  *   - Never invents models: anything the API adds shows up as soon as the
  *     models.dev catalog (which OpenCode already ships) lists it.
+ *   - Tests models on first use (lazy health check) — disables models that
+ *     timeout or error on chat completions.
  *
  * The provider itself (endpoint + API key) can be supplied here too, so a fresh
  * OpenCode install needs no hand-written `providers.nvidia` block.
@@ -26,9 +28,11 @@ const PROVIDER = "nvidia"
 const DEFAULT_DISCOVERY = "https://integrate.api.nvidia.com/v1"
 const DEFAULT_REFRESH_HOURS = 6
 const CACHE_KEY = "nvidia/live-inventory"
+const HEALTH_CACHE_KEY = "nvidia/model-health"
 const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000
 const MIN_PLAUSIBLE_MODELS = 3
 const RETRY_MINUTES = 30
+const HEALTH_TIMEOUT_MS = 10_000
 
 // Known free-tier model IDs (from the scraped free_models.json)
 const FREE_MODEL_IDS = [
@@ -73,9 +77,11 @@ type Options = {
   discoveryURL?: string
   extraModels?: string[]
   includeFreeModels?: boolean
+  testModelsOnUse?: boolean
 }
 
 type Cache = { at: number; ids: string[] }
+type HealthCache = { at: number; results: Record<string, boolean> }
 
 /** API key from the global config, so users do not have to repeat it in options. */
 function keyFromConfig(): string | undefined {
@@ -128,6 +134,45 @@ async function fetchLiveModels(discoveryURL: string, apiKey: string, signal: Abo
   return ids
 }
 
+/** Test a model with a quick chat completion. Returns true if it works. */
+async function testModelHealth(baseURL: string, apiKey: string, modelId: string): Promise<boolean> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
+  try {
+    const url = `${baseURL.replace(/\/+$/, "")}/chat/completions`
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 5,
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      log(`health check failed for ${modelId}: HTTP ${response.status} ${err.error?.message ?? ""}`)
+      return false
+    }
+    const data = await response.json()
+    return Boolean(data.choices?.[0]?.message?.content)
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      log(`health check timeout for ${modelId} (${HEALTH_TIMEOUT_MS}ms)`)
+    } else {
+      log(`health check error for ${modelId}: ${String(error)}`)
+    }
+    return false
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export default Plugin.define({
   id: "nvidia-models",
 
@@ -141,8 +186,21 @@ export default Plugin.define({
     const interval = refreshHours * 60 * 60 * 1000
     const extraModels = (options.extraModels ?? []).filter((id): id is string => typeof id === "string" && id.length > 0)
     const includeFreeModels = options.includeFreeModels !== false
+    const testModelsOnUse = options.testModelsOnUse !== false
 
-    const state: { live?: Set<string>; warnedNoKey: boolean } = { warnedNoKey: false }
+    const state: { live?: Set<string>; warnedNoKey: boolean; healthCache?: HealthCache } = {
+      warnedNoKey: false,
+    }
+
+    // Load health cache
+    try {
+      const cached = (await ctx.storage.get(HEALTH_CACHE_KEY)) as HealthCache | undefined
+      if (cached && Date.now() - cached.at < CACHE_MAX_AGE) {
+        state.healthCache = cached
+      }
+    } catch (error) {
+      log(`could not read health cache: ${String(error)}`)
+    }
 
     // Warm start: reuse a recent inventory so a restart during an outage keeps
     // the list correct instead of falling back to stale catalog entries.
@@ -215,6 +273,38 @@ export default Plugin.define({
         if (!live.has(model.id)) editor.remove(PROVIDER, model.id)
       }
     })
+
+    /** Check model health (with cache). Returns true if healthy. */
+    const checkHealth = async (modelId: string): Promise<boolean> => {
+      if (!testModelsOnUse) return true
+      if (!apiKey) return true // Can't test without key
+
+      const cache = state.healthCache ?? { at: Date.now(), results: {} }
+      if (cache.results[modelId] !== undefined) {
+        return cache.results[modelId]
+      }
+
+      log(`health checking ${modelId}...`)
+      const healthy = await testModelHealth(baseURL, apiKey, modelId)
+      cache.results[modelId] = healthy
+      cache.at = Date.now()
+      state.healthCache = cache
+
+      try {
+        await ctx.storage.set(HEALTH_CACHE_KEY, cache)
+      } catch (e) {
+        log(`failed to save health cache: ${String(e)}`)
+      }
+
+      if (!healthy) {
+        log(`disabling unhealthy model: ${modelId}`)
+        // Remove from model picker
+        await ctx.model.transform((editor) => {
+          editor.remove(PROVIDER, modelId)
+        })
+      }
+      return healthy
+    }
 
     const refresh = async (): Promise<boolean> => {
       if (!apiKey) {

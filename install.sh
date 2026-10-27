@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ./install.sh --key nvapi-... [--extra-model nvidia/...] \
-#                [--refresh-hours 6] [--include-free] \
+#                [--refresh-hours 6] [--include-free] [--no-test-on-use] \
 #                [--plugin github:rmrtnv/opencode-nvidia-models]
 #
 # Key can also come from $NVIDIA_API_KEY (no --key needed).
@@ -17,6 +17,7 @@ REFRESH_HOURS="6"
 SET_DEFAULT="yes"
 EXTRA_MODELS=()
 INCLUDE_FREE="true"
+TEST_ON_USE="true"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -25,8 +26,9 @@ while [ $# -gt 0 ]; do
     --refresh-hours) REFRESH_HOURS="${2:-}"; shift 2 ;;
     --extra-model) EXTRA_MODELS+=("${2:-}"); shift 2 ;;
     --include-free) INCLUDE_FREE="true"; shift ;;
+    --no-test-on-use) TEST_ON_USE="false"; shift ;;
     --no-default) SET_DEFAULT="no"; shift ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -68,6 +70,7 @@ DEFAULT_MODEL="$DEFAULT_MODEL" \
 SET_DEFAULT="$SET_DEFAULT" \
 EXTRA_MODELS="$(IFS=,; echo "${EXTRA_MODELS[*]:-}")" \
 INCLUDE_FREE="$INCLUDE_FREE" \
+TEST_ON_USE="$TEST_ON_USE" \
 python3 - <<'PY'
 import json, os, sys
 
@@ -79,6 +82,7 @@ default_model = os.environ["DEFAULT_MODEL"]
 set_default = os.environ["SET_DEFAULT"] == "yes"
 extras = [entry for entry in os.environ.get("EXTRA_MODELS", "").split(",") if entry]
 include_free = os.environ.get("INCLUDE_FREE", "false") == "true"
+test_on_use = os.environ.get("TEST_ON_USE", "true") == "true"
 
 try:
     with open(path) as fh:
@@ -106,6 +110,8 @@ if spec:
                 options["extraModels"] = merged
             if include_free:
                 options["includeFreeModels"] = True
+            if not test_on_use:
+                options["testModelsOnUse"] = False
             plugins[index] = {"package": spec, "options": options}
             break
     else:
@@ -114,6 +120,8 @@ if spec:
             options["extraModels"] = extras
         if include_free:
             options["includeFreeModels"] = True
+        if not test_on_use:
+            options["testModelsOnUse"] = False
         plugins.append({"package": spec, "options": options})
 
 if set_default and not str(cfg.get("model", "")).startswith("nvidia/"):

@@ -3,6 +3,7 @@
 Keeps OpenCode's NVIDIA (build.nvidia.com) model list in sync with the live API.
 Retires models the API stops serving; optionally exposes live-but-uncatalogued models
 (e.g. `nvidia/nemotron-3.5-bolt-e4b`) via an allow-list.
+**Tests models on first use** — disables models that timeout or error on chat completions.
 
 ## One-line install
 
@@ -24,6 +25,7 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 | **Prune retired models** | Every 6 h (configurable) it calls `GET /v1/models`; any catalog model not in the response is removed. |
 | **Cache & retry** | Last good inventory cached 7 days. On HTTP 451 / network failure it keeps the cached list and retries in 30 min. |
 | **Extra models** | `extraModels: ["nvidia/nemotron-3.5-bolt-e4b"]` adds models the API serves but models.dev hasn't catalogued yet, with safe defaults (64 k context, tools enabled). |
+| **Lazy health check** | On first use, tests each model with a quick chat completion. Models that timeout/error are disabled and removed from the picker. Results cached 7 days. |
 | **Zero-config provider** | The plugin only *updates* the catalog `nvidia` provider with your `baseURL` + key. You still need the key in `providers.nvidia.settings.apiKey` or `NVIDIA_API_KEY` to activate it. |
 
 ## Config (usually created by `install.sh`)
@@ -58,6 +60,7 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 | `refreshHours` | `6` | Re-check interval (min 1). |
 | `extraModels` | `[]` | Explicit allow-list of model IDs to expose when live but missing from the catalog. |
 | `includeFreeModels` | `true` | If `true`, automatically adds all known free-tier models that are currently live (uses a built-in list synced from the NVIDIA free models page). |
+| `testModelsOnUse` | `true` | If `true`, tests each model with a quick chat completion on first use. Failing models are disabled and cached for 7 days. |
 
 ### `extraModels` vs `includeFreeModels`
 
