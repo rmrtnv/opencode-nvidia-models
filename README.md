@@ -30,26 +30,36 @@ model list aligned with what the API actually serves.
   a region restriction (HTTP 451) never empties your model list.
 - Rejects implausibly short responses (fewer than 3 models) and retries after
   **30 minutes** instead of wiping the list.
-- With `addUnknown: true`, also exposes models the API serves but the catalog
-  does not know yet — using conservative limits (64K context, text-only tools).
-  They disappear on the next refresh if NVIDIA stops serving them.
+- With `extraModels`, also exposes named models the API serves but the catalog
+  does not know yet — using conservative limits (64K context, text tools). They
+  disappear on the next refresh if NVIDIA stops serving them.
 
 ## Live inventory vs the catalog (why some models are missing)
 
 OpenCode's catalog comes from models.dev, which is curated, not exhaustive. On
-2026-10-26 the NVIDIA API served **85** model IDs while models.dev listed **52**.
+2026-10-27 the NVIDIA API served **85** model IDs while models.dev listed **52**.
 So a model can be genuinely live and still be absent from `/models`.
 
-`nvidia/nemotron-3.5-bolt-e4b` is exactly this case: present in the API snapshot
-from 2026-10-26, absent from models.dev today. Two ways to keep it:
+`nvidia/nemotron-3.5-bolt-e4b` is exactly this case: served by the API, missing
+from models.dev. Two ways to keep it:
 
 ```jsonc
-// a) explicit entry, pruned automatically once your API stops serving it
+// a) explicit config entry
 { "providers": { "nvidia": { "models": { "nvidia/nemotron-3.5-bolt-e4b": {} } } } }
 
-// b) let the plugin mirror the live inventory (recommended)
-{ "plugins": [{ "package": "opencode-nvidia-models", "options": { "addUnknown": true } }] }
+// b) plugin allowlist, pruned automatically when the API stops serving it
+{
+  "plugins": [
+    {
+      "package": "opencode-nvidia-models",
+      "options": { "extraModels": ["nvidia/nemotron-3.5-bolt-e4b"] },
+    },
+  ],
+}
 ```
+
+The allowlist matters: the API also exposes embeddings, rerankers, detectors and
+media models. Mirroring it wholesale would bury the chat models in `/models`.
 
 ## Install
 
@@ -57,7 +67,7 @@ from 2026-10-26, absent from models.dev today. Two ways to keep it:
 opencode plugin add github:<you>/opencode-nvidia-models
 ```
 
-Then give it an API key — any **one** of these:
+Then give it an API key — either of these **activates the provider**:
 
 ```bash
 # 1. environment (simplest)
@@ -71,14 +81,9 @@ export NVIDIA_API_KEY="nvapi-..."
 }
 ```
 
-```jsonc
-// 3. plugin options
-{
-  "plugins": [
-    { "package": "opencode-nvidia-models", "options": { "apiKey": "nvapi-..." } },
-  ],
-}
-```
+`options.apiKey` also works as a fallback for the discovery request, but on its
+own it does **not** activate the provider — OpenCode still needs the credential
+from the config or the environment. `install.sh` writes the config form.
 
 Restart OpenCode once after installing the plugin (config edits alone are picked
 up live, but the plugin set is read at server start). Then run `/models`.
@@ -97,11 +102,11 @@ up live, but the plugin set is read at server start). Then run `/models`.
 
 | Option         | Default                            | Purpose                                                        |
 | -------------- | ---------------------------------- | -------------------------------------------------------------- |
-| `apiKey`       | `NVIDIA_API_KEY`, then config      | Credential used for the discovery request.                     |
+| `apiKey`       | `NVIDIA_API_KEY`, then config      | Credential used for the discovery request only.                |
 | `baseURL`      | `https://integrate.api.nvidia.com/v1` | Provider endpoint (also used for discovery unless overridden). |
 | `discoveryURL` | value of `baseURL`                 | Separate endpoint for `GET /models` (useful behind a gateway). |
 | `refreshHours` | `6`                                | How often to re-check the inventory. Minimum 1.                |
-| `addUnknown`   | `false`                            | Also expose live models missing from the catalog, with conservative limits. |
+| `extraModels`  | `[]`                               | Model IDs to expose when live but absent from the catalog.     |
 
 Failed checks retry after 30 minutes regardless of `refreshHours`.
 
@@ -156,13 +161,13 @@ That is the whole setup — no MCP server required.
 Tested against OpenCode 2.2.0:
 
 - Live inventory reached → retired models pruned (`21 → 2` in a mock test).
-- `addUnknown: true` → a live model absent from the catalog is added with
-  conservative limits (`2 → 3`, new entry selectable).
+- `extraModels` → a live model absent from the catalog is added with
+  conservative limits (`20 → 21` with bolt-e4b added).
 - API returns HTTP 451 (region-blocked) → catalog list kept, warning logged.
 - Discovery endpoint down on restart → cached inventory reused, list intact.
 - Truncated 1-model response → rejected, previous list kept.
-- No `providers.nvidia` block in config → provider still registered from the
-  plugin's `apiKey`, models listed.
+- Provider must be activated via `providers.nvidia.settings.apiKey` or
+  `NVIDIA_API_KEY`; `options.apiKey` alone only supplies the discovery request.
 
 ## License
 

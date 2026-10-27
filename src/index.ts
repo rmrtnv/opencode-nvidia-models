@@ -35,28 +35,34 @@ type Options = {
   baseURL?: string
   refreshHours?: number
   discoveryURL?: string
-  addUnknown?: boolean
+  extraModels?: string[]
 }
 
 type Cache = { at: number; ids: string[] }
 
 /** API key from the global config, so users do not have to repeat it in options. */
 function keyFromConfig(): string | undefined {
+  const candidates: string[] = []
+  if (process.env.OPENCODE_CONFIG) candidates.push(process.env.OPENCODE_CONFIG)
   const roots = [process.env.XDG_CONFIG_HOME, join(homedir(), ".config")].filter(
     (entry): entry is string => Boolean(entry),
   )
   for (const root of roots) {
     for (const file of ["opencode.json", "opencode.jsonc"]) {
-      try {
-        const raw = readFileSync(join(root, "opencode", file), "utf8")
-        const json = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ""))
-        const modern = json?.providers?.[PROVIDER]?.settings?.apiKey
-        const legacy = json?.provider?.[PROVIDER]?.options?.apiKey
-        const key = modern ?? legacy
-        if (typeof key === "string" && key.length > 0) return key
-      } catch {
-        // missing/invalid file: try the next candidate
-      }
+      candidates.push(join(root, "opencode", file))
+    }
+  }
+
+  for (const path of candidates) {
+    try {
+      const raw = readFileSync(path, "utf8")
+      const json = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ""))
+      const modern = json?.providers?.[PROVIDER]?.settings?.apiKey
+      const legacy = json?.provider?.[PROVIDER]?.options?.apiKey
+      const key = modern ?? legacy
+      if (typeof key === "string" && key.length > 0) return key
+    } catch {
+      // missing/invalid file: try the next candidate
     }
   }
   return undefined
@@ -96,7 +102,7 @@ export default Plugin.define({
     const discoveryURL = options.discoveryURL || baseURL
     const refreshHours = Math.max(1, Number(options.refreshHours) || DEFAULT_REFRESH_HOURS)
     const interval = refreshHours * 60 * 60 * 1000
-    const addUnknown = options.addUnknown === true
+    const extraModels = (options.extraModels ?? []).filter((id): id is string => typeof id === "string" && id.length > 0)
 
     const state: { live?: Set<string>; warnedNoKey: boolean } = { warnedNoKey: false }
 
@@ -111,37 +117,29 @@ export default Plugin.define({
       log(`could not read cache: ${String(error)}`)
     }
 
-    // Provider registration: makes a fresh install work with just an API key.
-    // With addUnknown, live models that the catalog does not know yet are added
-    // with conservative limits, so an endpoint NVIDIA serves today is usable
-    // before models.dev catches up.
+    // Provider registration: attach our endpoint + key to the catalog provider.
+    // Never add a provider here: adding one shadows the catalog source and
+    // replaces its model inventory with an empty list.
     try {
       await ctx.provider.transform((editor) => {
+        const record = editor.get(PROVIDER)
+        if (!record) return
+
         const settings: Record<string, unknown> = { baseURL }
         if (apiKey) settings.apiKey = apiKey
 
-        if (editor.get(PROVIDER)) {
-          editor.update(PROVIDER, (provider) => {
-            provider.settings = { ...(provider.settings as Record<string, unknown> | undefined), ...settings }
-          })
-        } else {
-          editor.add({
-            info: {
-              ...Provider.Info.empty(Provider.ID.make(PROVIDER)),
-              name: "NVIDIA (build.nvidia.com)",
-              activation: "enabled",
-              package: "@opencode/ai/providers/openai-compatible",
-              settings,
-            },
-            models: [],
-          })
-        }
+        editor.update(PROVIDER, (provider) => {
+          provider.settings = { ...(provider.settings as Record<string, unknown> | undefined), ...settings }
+        })
 
         const live = state.live
-        const record = editor.get(PROVIDER)
-        if (!addUnknown || !live || !record) return
+        if (extraModels.length === 0 || !live) return
 
-        const missing = [...live].filter((id) => !record.models.has(id))
+        // Only models the caller explicitly asked for, and only while the API
+        // actually serves them. Covers endpoints models.dev has not catalogued
+        // yet (for example nvidia/nemotron-3.5-bolt-e4b) without polluting the
+        // picker with embeddings, detectors, or media models.
+        const missing = extraModels.filter((id) => live.has(id) && !record.models.has(id))
         if (missing.length === 0) return
 
         const added = missing.map((id) => ({
@@ -191,9 +189,8 @@ export default Plugin.define({
         state.live = next
 
         await ctx.storage.set(CACHE_KEY, { at: Date.now(), ids } satisfies Cache)
-        // Provider transform adds live-but-uncatalogued models; the model
-        // transform prunes retired ones. Both need a rebuild to see `state.live`.
-        await ctx.provider.reload()
+        // Rebuilding the model domain re-runs the prune/extras transforms with
+        // the fresh inventory. Provider settings are already applied at setup.
         await ctx.model.reload()
 
         if (!before) {
