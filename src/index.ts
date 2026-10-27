@@ -29,6 +29,7 @@ const DEFAULT_DISCOVERY = "https://integrate.api.nvidia.com/v1"
 const DEFAULT_REFRESH_HOURS = 6
 const CACHE_KEY = "nvidia/live-inventory"
 const HEALTH_CACHE_KEY = "nvidia/model-health"
+const STATUS_CACHE_KEY = "nvidia/model-status"
 const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000
 const MIN_PLAUSIBLE_MODELS = 3
 const RETRY_MINUTES = 30
@@ -293,7 +294,62 @@ export default Plugin.define({
           state.live = await runStartupHealthChecks(next)
         }
 
-        log(`loaded ${state.live.size} live models`)
+        // Log summary of all candidate models with status
+        const allCandidates = new Set<string>([...extraModels])
+        if (includeFreeModels) {
+          for (const id of FREE_MODEL_IDS) {
+            if (next.has(id)) allCandidates.add(id)
+          }
+        }
+        // Also include catalog models that are live
+        try {
+          const record = await ctx.provider.get(PROVIDER)
+          if (record) {
+            for (const model of record.models.values()) {
+              if (next.has(model.id)) allCandidates.add(model.id)
+            }
+          }
+        } catch {}
+
+        const cache = state.healthCache ?? { at: Date.now(), results: {} }
+        const lines = ["model status summary:"]
+        let healthyCount = 0, unhealthyCount = 0, untestedCount = 0
+        for (const id of [...allCandidates].sort()) {
+          const inLive = next.has(id)
+          const isExtra = extraModels.includes(id)
+          const isFree = FREE_MODEL_IDS.includes(id)
+          const source = isExtra ? "extra" : isFree ? "free" : "catalog"
+          const status = cache.results[id] === true ? "✓ healthy" : cache.results[id] === false ? "✗ failed" : inLive ? "? untested" : "⊘ not live"
+          if (cache.results[id] === true) healthyCount++
+          else if (cache.results[id] === false) unhealthyCount++
+          else if (inLive) untestedCount++
+          lines.push(`  ${id} [${source}] ${status}`)
+        }
+        lines.push(`summary: ${healthyCount} healthy, ${unhealthyCount} failed, ${untestedCount} untested, ${next.size} live total`)
+        log(lines.join("\n"))
+
+        log(`loaded ${state.live.size} live models (${healthyCount} verified healthy)`)
+
+        // Save full status for user inspection
+        const statusEntries = [...allCandidates].map((id) => {
+          const inLive = next.has(id)
+          const isExtra = extraModels.includes(id)
+          const isFree = FREE_MODEL_IDS.includes(id)
+          const source = isExtra ? "extra" : isFree ? "free" : "catalog"
+          const health = cache.results[id]
+          let status: "healthy" | "failed" | "untested" | "not-live"
+          if (health === true) status = "healthy"
+          else if (health === false) status = "failed"
+          else if (inLive) status = "untested"
+          else status = "not-live"
+          return { id, source, status, live: inLive }
+        })
+        try {
+          await ctx.storage.set(STATUS_CACHE_KEY, { at: Date.now(), entries: statusEntries })
+        } catch (e) {
+          log(`failed to save status cache: ${String(e)}`)
+        }
+
         return true
       } catch (error) {
         log(`initial live check failed: ${String(error)}`)
