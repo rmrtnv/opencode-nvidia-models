@@ -78,6 +78,7 @@ type Options = {
   extraModels?: string[]
   includeFreeModels?: boolean
   testModelsOnUse?: boolean
+  testAllOnStartup?: boolean
 }
 
 type Cache = { at: number; ids: string[] }
@@ -187,6 +188,7 @@ export default Plugin.define({
     const extraModels = (options.extraModels ?? []).filter((id): id is string => typeof id === "string" && id.length > 0)
     const includeFreeModels = options.includeFreeModels !== false
     const testModelsOnUse = options.testModelsOnUse !== false
+    const testAllOnStartup = options.testAllOnStartup === true
 
     const state: { live?: Set<string>; warnedNoKey: boolean; healthCache?: HealthCache } = {
       warnedNoKey: false,
@@ -212,6 +214,97 @@ export default Plugin.define({
     } catch (error) {
       log(`could not read cache: ${String(error)}`)
     }
+
+    // Proactive health check: test all candidate models on startup, only keep healthy ones.
+    // This runs after we have the live inventory (from cache or after first refresh).
+    const runStartupHealthChecks = async (live: Set<string>): Promise<Set<string>> => {
+      if (!testAllOnStartup || !apiKey || !live || live.size === 0) return live
+
+      // Build the candidate list: only extraModels + freeModels that are live (models we actually add to picker)
+      const candidates = new Set<string>([...extraModels])
+      if (includeFreeModels) {
+        for (const id of FREE_MODEL_IDS) {
+          if (live.has(id)) candidates.add(id)
+        }
+      }
+
+      const toTest = [...candidates].filter((id) => live.has(id))
+      if (toTest.length === 0) return live
+
+      log(`startup health check: testing ${toTest.length} models...`)
+
+      const cache = state.healthCache ?? { at: Date.now(), results: {} }
+      const healthy = new Set<string>()
+
+      // Test in parallel with concurrency limit
+      const CONCURRENCY = 3
+      for (let i = 0; i < toTest.length; i += CONCURRENCY) {
+        const batch = toTest.slice(i, i + CONCURRENCY)
+        const results = await Promise.all(
+          batch.map(async (modelId) => {
+            if (cache.results[modelId] !== undefined) {
+              return { modelId, healthy: cache.results[modelId] }
+            }
+            log(`health checking ${modelId}...`)
+            const h = await testModelHealth(baseURL, apiKey, modelId)
+            cache.results[modelId] = h
+            return { modelId, healthy: h }
+          })
+        )
+        for (const { modelId, healthy: h } of results) {
+          if (h) healthy.add(modelId)
+          else log(`disabling unhealthy model: ${modelId}`)
+        }
+      }
+
+      cache.at = Date.now()
+      state.healthCache = cache
+      try {
+        await ctx.storage.set(HEALTH_CACHE_KEY, cache)
+      } catch (e) {
+        log(`failed to save health cache: ${String(e)}`)
+      }
+
+      log(`startup health check complete: ${healthy.size}/${toTest.length} models healthy`)
+      return healthy
+    }
+
+    // Initial refresh: fetch live inventory first, then run health checks
+    const initialRefresh = async (): Promise<boolean> => {
+      if (!apiKey) {
+        if (!state.warnedNoKey) {
+          state.warnedNoKey = true
+          log("no API key found (option, NVIDIA_API_KEY, or config); keeping the catalog list as-is")
+        }
+        return true
+      }
+
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 20_000)
+      try {
+        const ids = await fetchLiveModels(discoveryURL, apiKey, controller.signal)
+        const next = new Set(ids)
+        state.live = next
+
+        await ctx.storage.set(CACHE_KEY, { at: Date.now(), ids: [...next] } satisfies Cache)
+
+        // Run startup health checks on the fresh inventory
+        if (testAllOnStartup) {
+          state.live = await runStartupHealthChecks(next)
+        }
+
+        log(`loaded ${state.live.size} live models`)
+        return true
+      } catch (error) {
+        log(`initial live check failed: ${String(error)}`)
+        return false
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+
+    // Run initial refresh first
+    await initialRefresh()
 
     // Provider registration: attach our endpoint + key to the catalog provider.
     // Never add a provider here: adding one shadows the catalog source and
@@ -321,9 +414,23 @@ export default Plugin.define({
         const ids = await fetchLiveModels(discoveryURL, apiKey, controller.signal)
         const next = new Set(ids)
         const before = state.live
+        
+        // Run health checks on newly added models if testAllOnStartup is enabled
+        if (testAllOnStartup && before) {
+          const newModels = [...next].filter((id) => !before.has(id))
+          if (newModels.length > 0) {
+            log(`refresh: testing ${newModels.length} new models...`)
+            const healthyNew = await runStartupHealthChecks(new Set(newModels))
+            // Only keep healthy new models
+            for (const id of newModels) {
+              if (!healthyNew.has(id)) next.delete(id)
+            }
+          }
+        }
+        
         state.live = next
 
-        await ctx.storage.set(CACHE_KEY, { at: Date.now(), ids } satisfies Cache)
+        await ctx.storage.set(CACHE_KEY, { at: Date.now(), ids: [...next] } satisfies Cache)
         // Rebuilding the model domain re-runs the prune/extras transforms with
         // the fresh inventory. Provider settings are already applied at setup.
         await ctx.model.reload()
@@ -362,7 +469,8 @@ export default Plugin.define({
       timer = setTimeout(() => void tick(), ok ? interval : RETRY_MINUTES * 60 * 1000)
     }
 
-    await tick()
+    // Start periodic refresh timer
+    timer = setTimeout(() => void tick(), interval)
 
     return () => {
       stopped = true
