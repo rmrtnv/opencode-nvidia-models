@@ -16,7 +16,7 @@ API_KEY="${NVIDIA_API_KEY:-}"
 REFRESH_HOURS="6"
 SET_DEFAULT="yes"
 EXTRA_MODELS=()
-INCLUDE_FREE="false"
+INCLUDE_FREE="true"
 
 while [ $# -gt 0 ]; do
   case "$1" in

@@ -140,7 +140,7 @@ export default Plugin.define({
     const refreshHours = Math.max(1, Number(options.refreshHours) || DEFAULT_REFRESH_HOURS)
     const interval = refreshHours * 60 * 60 * 1000
     const extraModels = (options.extraModels ?? []).filter((id): id is string => typeof id === "string" && id.length > 0)
-    const includeFreeModels = options.includeFreeModels === true
+    const includeFreeModels = options.includeFreeModels !== false
 
     const state: { live?: Set<string>; warnedNoKey: boolean } = { warnedNoKey: false }
 

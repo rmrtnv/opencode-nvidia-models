@@ -57,7 +57,7 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 | `discoveryURL` | `baseURL` | Separate `GET /models` endpoint (e.g. behind a gateway). |
 | `refreshHours` | `6` | Re-check interval (min 1). |
 | `extraModels` | `[]` | Explicit allow-list of model IDs to expose when live but missing from the catalog. |
-| `includeFreeModels` | `false` | If `true`, automatically adds all known free-tier models that are currently live (uses a built-in list synced from the NVIDIA free models page). |
+| `includeFreeModels` | `true` | If `true`, automatically adds all known free-tier models that are currently live (uses a built-in list synced from the NVIDIA free models page). |
 
 ### `extraModels` vs `includeFreeModels`
 
