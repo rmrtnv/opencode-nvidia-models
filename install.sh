@@ -47,7 +47,9 @@ fi
 
 if [ -n "$PLUGIN_SPEC" ]; then
   if [ -d "$PLUGIN_SPEC" ]; then
-    echo "==> local plugin directory, adding to $CONFIG_FILE"
+    # Resolve to absolute path for reliable loading regardless of server CWD
+    PLUGIN_SPEC="$(cd "$PLUGIN_SPEC" && pwd)"
+    echo "==> local plugin directory ($PLUGIN_SPEC), adding to $CONFIG_FILE"
   else
     echo "==> opencode plugin add $PLUGIN_SPEC"
     opencode plugin add "$PLUGIN_SPEC"
