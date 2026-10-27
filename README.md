@@ -26,7 +26,7 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 | **Extra models** | `extraModels: ["nvidia/nemotron-3.5-bolt-e4b"]` adds models the API serves but models.dev hasn't catalogued yet, with safe defaults (64 k context, tools enabled). |
 | **Zero-config provider** | The plugin only *updates* the catalog `nvidia` provider with your `baseURL` + key. You still need the key in `providers.nvidia.settings.apiKey` or `NVIDIA_API_KEY` to activate it. |
 
-## Minimal config (put in `~/.config/opencode/opencode.json`)
+## Config (usually created by `install.sh`)
 
 ```jsonc
 {
@@ -58,6 +58,25 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 | `refreshHours` | `6` | Re-check interval (min 1). |
 | `extraModels` | `[]` | Model IDs to expose when live but missing from the catalog. |
 
+### What are `extraModels` and how to find them?
+
+The NVIDIA API often serves models that aren't yet in the models.dev catalog OpenCode uses.
+`extraModels` is an allow-list: only the IDs you list are added, and only while the API actually serves them.
+
+To discover candidates, run once with a valid key:
+
+```bash
+curl -H "Authorization: Bearer $NVIDIA_API_KEY" https://integrate.api.nvidia.com/v1/models | jq '.data[].id'
+```
+
+Compare that list to what `/models` shows in OpenCode. Any ID that appears in the API response but not in `/models` is a candidate for `extraModels`.
+
+Example: `nvidia/nemotron-3.5-bolt-e4b` is live but missing from the catalog — add it with:
+
+```jsonc
+"extraModels": ["nvidia/nemotron-3.5-bolt-e4b"]
+```
+
 ## Reinstall / new machine
 
 ```bash
@@ -66,12 +85,6 @@ export NVIDIA_API_KEY="nvapi-..."   # or copy your opencode.json
 ```
 
 `opencode uninstall` keeps config and sessions, so a reinstall on the same machine needs nothing else.
-
-## Why not MCP / plain config?
-
-* **Config alone** is static — retired endpoints linger until you edit the file.  
-* **MCP** gives agents tools/data, it cannot register or prune models.  
-* **A plugin** is the only extension point that can add/remove provider models at runtime (`ctx.provider.transform`, `ctx.model.transform`).
 
 ## License
 
