@@ -3,13 +3,10 @@
 # global config. Safe to re-run: it merges instead of overwriting.
 #
 # Usage:
-#   ./install.sh --key nvapi-...                     # npm/GitHub install
-#   ./install.sh --key nvapi-... --plugin github:you/opencode-nvidia-models
-#   ./install.sh --key nvapi-... --plugin /path/to/opencode-nvidia-models
-#   ./install.sh --key nvapi-... --refresh-hours 24
-#   ./install.sh --key nvapi-... --extra-model nvidia/nemotron-3.5-bolt-e4b
+#   ./install.sh --key nvapi-... [--extra-model nvidia/nemotron-3.5-bolt-e4b] \
+#                [--refresh-hours 6] [--plugin github:rmrtnv/opencode-nvidia-models]
 #
-# The key can also come from $NVIDIA_API_KEY instead of --key.
+# Key can also come from $NVIDIA_API_KEY (no --key needed).
 
 set -euo pipefail
 
