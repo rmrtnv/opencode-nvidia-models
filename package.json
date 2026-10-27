@@ -1,0 +1,24 @@
+{
+  "name": "opencode-nvidia-models",
+  "version": "0.1.0",
+  "description": "Keeps the NVIDIA (build.nvidia.com) model list in OpenCode in sync with what the API actually serves.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "nvidia",
+    "nim",
+    "models"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode/plugin": "latest"
+  }
+}
