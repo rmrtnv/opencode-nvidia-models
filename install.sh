@@ -35,7 +35,7 @@ done
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 CONFIG_FILE="$CONFIG_HOME/opencode/opencode.json"
-DEFAULT_MODEL="nvidia/deepseek-ai/deepseek-v4.1-flash"
+DEFAULT_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "error: 'opencode' is not on PATH" >&2

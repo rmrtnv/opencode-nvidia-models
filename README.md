@@ -33,7 +33,7 @@ Restart OpenCode once, then run `/models` and pick any `nvidia/` model.
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "nvidia/deepseek-ai/deepseek-v4.1-flash",
+  "model": "nvidia/nemotron-3-ultra-550b-a55b",
   "plugins": [
     { "package": "github:rmrtnv/opencode-nvidia-models",
       "options": { "refreshHours": 6,
